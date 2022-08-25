@@ -3,9 +3,6 @@ const c = @cImport({
     @cInclude("time.h");
 });
 
-// getAppDataDir()
-const default_save_location = "~/.config/until/data.bin";
-
 const usage_message =
     \\usage:
     \\  until <command>
@@ -13,6 +10,7 @@ const usage_message =
     \\    add  <event_name> [<description>] <date>
     \\    rm   <event_id>
     \\    list
+    \\    reset (delete save file)
     \\
 ;
 
@@ -51,6 +49,8 @@ pub fn main() !void {
             std.log.err("Failed to list events. Error: {}", .{err});
             return;
         };
+    } else if (matches(u8, command, "reset")) {
+        try commandReset(allocator);
     } else {
         std.log.err("Invalid command argument: {s}", .{args[0]});
     }
@@ -58,7 +58,6 @@ pub fn main() !void {
 
 fn commandAdd(allocator: std.mem.Allocator, name: []const u8, date: []const u8) !void {
     const timestamp = try parseDateString(date);
-    std.log.info("Adding command: {s} at {d}", .{ name, timestamp });
     const savefile_path = try std.fs.getAppDataDir(allocator, "until");
     defer allocator.free(savefile_path);
     var save_file = blk: {
@@ -66,6 +65,7 @@ fn commandAdd(allocator: std.mem.Allocator, name: []const u8, date: []const u8) 
             if (open_err != error.FileNotFound) {
                 return open_err;
             }
+            std.log.info("No savefile found. Creating..", .{});
             const new_file = std.fs.createFileAbsolute(savefile_path, .{ .truncate = true, .read = true }) catch |create_err| {
                 std.log.err("Failed to create new savefile at '{s}'. Error: {}", .{ savefile_path, create_err });
                 return create_err;
@@ -75,6 +75,11 @@ fn commandAdd(allocator: std.mem.Allocator, name: []const u8, date: []const u8) 
         break :blk existing_file;
     };
     defer save_file.close();
+
+    // Seek to end so that we append new data
+    const end_position = try save_file.getEndPos();
+    try save_file.seekTo(end_position);
+
     const writer = save_file.writer();
     try writer.writeIntLittle(i64, timestamp);
     try writer.writeIntLittle(u32, @intCast(u32, name.len));
@@ -87,10 +92,22 @@ fn commandRemove(name: []const u8) void {
     std.log.info("Removing event: {s}", .{name});
 }
 
+fn commandReset(allocator: std.mem.Allocator) !void {
+    const savefile_path: []const u8 = try std.fs.getAppDataDir(allocator, "until");
+    defer allocator.free(savefile_path);
+    std.log.info("Removing file: {s}", .{savefile_path});
+    try std.fs.deleteFileAbsolute(savefile_path);
+}
+
 fn commandList(allocator: std.mem.Allocator) !void {
     const savefile_path: []const u8 = try std.fs.getAppDataDir(allocator, "until");
     defer allocator.free(savefile_path);
-    const savefile = try std.fs.openFileAbsolute(savefile_path, .{ .mode = .read_only });
+    const savefile = std.fs.openFileAbsolute(savefile_path, .{ .mode = .read_only }) catch |err| {
+        if (err == error.FileNotFound) {
+            return;
+        }
+        return err;
+    };
     defer savefile.close();
     const reader = savefile.reader();
     var i: usize = 0;
