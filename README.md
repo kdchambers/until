@@ -2,7 +2,7 @@
 
 *Keep track of important milestones in the terminal.*
 
-## Buildling
+## Building
 
 ```
 git clone https://github.com/kdchambers/until
