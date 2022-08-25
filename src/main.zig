@@ -112,6 +112,7 @@ fn commandList(allocator: std.mem.Allocator) !void {
     const reader = savefile.reader();
     var i: usize = 0;
     var name_buffer: [256]u8 = undefined;
+    const current_time = std.time.timestamp();
     while (i < 100) : (i += 1) {
         const timestamp = reader.readIntLittle(i64) catch |err| {
             if (err == error.EndOfStream) {
@@ -126,7 +127,10 @@ fn commandList(allocator: std.mem.Allocator) !void {
             return error.SavefileCorrupted;
         }
         const name: []const u8 = name_buffer[0..name_length];
-        std.debug.print("  {d:.2}. {s} at {d}\n", .{ i + 1, name, timestamp });
+        const is_past = (current_time > timestamp);
+        const time_until = if (is_past) current_time - timestamp else timestamp - current_time;
+        const duration_days: u32 = @divTrunc(@intCast(u32, time_until), std.time.s_per_day);
+        std.debug.print("  {d:.2}. {d} days {s} {s}\n", .{ i + 1, duration_days, if (is_past) "since" else "until", name });
     }
 }
 
