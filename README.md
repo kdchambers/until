@@ -16,19 +16,21 @@ Until has no build dependencies.
 ### Add a new event
 
 ```
-until add <event_description> <date>
-until add "Trip to New York" 22/01/2023 
+unt add <event_description> <date>
+unt add "Last coffee" 15/04/2022
+unt add "Trip to New York" 22/01/2023
 ```
 
 ### List events
 
 ```
-until list
-> 1. 58 days until Trip to New York
+unt list
+> 1. 145 days since Last coffee
+> 2. 58 days until Trip to New York
 ```
 
 ### Reset saved data
 
 ```
-until reset
+unt reset
 ```
