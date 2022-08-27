@@ -197,11 +197,16 @@ fn parseDateString(date: []const u8) !i64 {
     var time: c.tm = undefined;
     time.tm_year = @intCast(c_int, year - 1900);
     time.tm_mon = @intCast(c_int, month - 1);
-    time.tm_mday = @intCast(c_int, day - 1);
+    time.tm_mday = @intCast(c_int, day);
     time.tm_hour = 0;
     time.tm_min = 0;
     time.tm_sec = 0;
 
     const timestamp = c.timegm(&time);
+
+    if (timestamp == -1) {
+        return error.Unknown;
+    }
+
     return timestamp;
 }
