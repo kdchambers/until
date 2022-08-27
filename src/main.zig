@@ -14,6 +14,11 @@ const usage_message =
     \\
 ;
 
+const JsonEntry = struct {
+    name: []const u8,
+    date: []const u8,
+};
+
 var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
 
 pub fn main() !void {
@@ -22,9 +27,10 @@ pub fn main() !void {
 
     var arena_instance = std.heap.ArenaAllocator.init(allocator);
     defer _ = arena_instance.deinit();
-    const arena = arena_instance.allocator();
 
+    const arena = arena_instance.allocator();
     const args = try std.process.argsAlloc(arena);
+
     if (args.len < 2) {
         std.debug.print(usage_message, .{});
         return;
@@ -57,7 +63,8 @@ pub fn main() !void {
 }
 
 fn commandAdd(allocator: std.mem.Allocator, name: []const u8, date: []const u8) !void {
-    const timestamp = try parseDateString(date);
+    // Just checking that the string is the correct format for when we deserialize
+    _ = try parseDateString(date);
     const savefile_path = try std.fs.getAppDataDir(allocator, "until");
     defer allocator.free(savefile_path);
     var save_file = blk: {
@@ -65,7 +72,7 @@ fn commandAdd(allocator: std.mem.Allocator, name: []const u8, date: []const u8) 
             if (open_err != error.FileNotFound) {
                 return open_err;
             }
-            std.log.info("No savefile found. Creating..", .{});
+            std.log.info("No savefile found, creating now: '{s}'", .{savefile_path});
             const new_file = std.fs.createFileAbsolute(savefile_path, .{ .truncate = true, .read = true }) catch |create_err| {
                 std.log.err("Failed to create new savefile at '{s}'. Error: {}", .{ savefile_path, create_err });
                 return create_err;
@@ -76,18 +83,15 @@ fn commandAdd(allocator: std.mem.Allocator, name: []const u8, date: []const u8) 
     };
     defer save_file.close();
 
-    // Seek to end so that we append new data
-    const end_position = try save_file.getEndPos();
-    try save_file.seekTo(end_position);
-
-    const writer = save_file.writer();
-    try writer.writeIntLittle(i64, timestamp);
-    try writer.writeIntLittle(u32, @intCast(u32, name.len));
-    try writer.writeIntLittle(u32, 0);
-    try writer.writeAll(name);
-    std.log.info("{s} successfully added", .{name});
+    const json_entry = JsonEntry{
+        .name = name,
+        .date = date,
+    };
+    const json_array = [1]JsonEntry{json_entry};
+    try std.json.stringify(json_array, .{}, save_file.writer());
 }
 
+// TODO: Implement
 fn commandRemove(name: []const u8) void {
     std.log.info("Removing event: {s}", .{name});
 }
@@ -95,7 +99,7 @@ fn commandRemove(name: []const u8) void {
 fn commandReset(allocator: std.mem.Allocator) !void {
     const savefile_path: []const u8 = try std.fs.getAppDataDir(allocator, "until");
     defer allocator.free(savefile_path);
-    std.log.info("Removing file: {s}", .{savefile_path});
+    std.log.info("Removing savefile: {s}", .{savefile_path});
     try std.fs.deleteFileAbsolute(savefile_path);
 }
 
@@ -109,28 +113,40 @@ fn commandList(allocator: std.mem.Allocator) !void {
         return err;
     };
     defer savefile.close();
-    const reader = savefile.reader();
-    var i: usize = 0;
-    var name_buffer: [256]u8 = undefined;
+
+    const json_string = try savefile.readToEndAlloc(allocator, 100 * 1024);
+    defer allocator.free(json_string);
+
+    var parser = std.json.Parser.init(allocator, true);
+    defer parser.deinit();
+
+    var json_root = try parser.parse(json_string);
+    defer json_root.deinit();
+
+    if (json_root.root.Array.items.len <= 0) {
+        return error.InvalidSavefile;
+    }
+
     const current_time = std.time.timestamp();
-    while (i < 100) : (i += 1) {
-        const timestamp = reader.readIntLittle(i64) catch |err| {
-            if (err == error.EndOfStream) {
-                return;
+    for (json_root.root.Array.items) |event, event_i| {
+        var it = event.Object.iterator();
+        var duration_days: u32 = 0;
+        var is_past: bool = false;
+        var event_name: []const u8 = undefined;
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*, "date")) {
+                const event_timestamp = try parseDateString(entry.value_ptr.*.String);
+                is_past = (current_time > event_timestamp);
+                const time_until = if (is_past) current_time - event_timestamp else event_timestamp - current_time;
+                duration_days = @divTrunc(@intCast(u32, time_until), std.time.s_per_day);
+                continue;
             }
-            return err;
-        };
-        const name_length = try reader.readIntLittle(u32);
-        try reader.skipBytes(@sizeOf(u32), .{});
-        if (try reader.read(name_buffer[0..name_length]) < name_length) {
-            std.log.err("Failed to read entire event name. Savefile is corrupted", .{});
-            return error.SavefileCorrupted;
+            if (std.mem.eql(u8, entry.key_ptr.*, "name")) {
+                event_name = entry.value_ptr.*.String;
+                continue;
+            }
         }
-        const name: []const u8 = name_buffer[0..name_length];
-        const is_past = (current_time > timestamp);
-        const time_until = if (is_past) current_time - timestamp else timestamp - current_time;
-        const duration_days: u32 = @divTrunc(@intCast(u32, time_until), std.time.s_per_day);
-        std.debug.print("  {d:.2}. {d} days {s} {s}\n", .{ i + 1, duration_days, if (is_past) "since" else "until", name });
+        std.debug.print("  {d:.2}. {d} days {s} {s}\n", .{ event_i + 1, duration_days, if (is_past) "since" else "until", event_name });
     }
 }
 
