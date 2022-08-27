@@ -14,6 +14,8 @@ const usage_message =
     \\
 ;
 
+const save_filename = "savefile.json";
+
 const JsonEntry = struct {
     name: []const u8,
     date: []const u8,
@@ -65,7 +67,16 @@ pub fn main() !void {
 fn commandAdd(allocator: std.mem.Allocator, name: []const u8, date: []const u8) !void {
     // Just checking that the string is the correct format for when we deserialize
     _ = try parseDateString(date);
-    const savefile_path = try std.fs.getAppDataDir(allocator, "until");
+
+    const app_dir = try std.fs.getAppDataDir(allocator, "until");
+    defer allocator.free(app_dir);
+    std.fs.makeDirAbsolute(app_dir) catch |err| {
+        if (err != error.PathAlreadyExists) {
+            return err;
+        }
+    };
+
+    const savefile_path = try std.mem.join(allocator, "/", &[_][]const u8{ app_dir, save_filename });
     defer allocator.free(savefile_path);
     var save_file = blk: {
         const existing_file = std.fs.openFileAbsolute(savefile_path, .{ .mode = .write_only }) catch |open_err| {
@@ -97,15 +108,20 @@ fn commandRemove(name: []const u8) void {
 }
 
 fn commandReset(allocator: std.mem.Allocator) !void {
-    const savefile_path: []const u8 = try std.fs.getAppDataDir(allocator, "until");
-    defer allocator.free(savefile_path);
-    std.log.info("Removing savefile: {s}", .{savefile_path});
-    try std.fs.deleteFileAbsolute(savefile_path);
+    const app_dir = try std.fs.getAppDataDir(allocator, "until");
+    defer allocator.free(app_dir);
+    std.log.info("Removing app directory: {s}", .{app_dir});
+    std.fs.deleteTreeAbsolute(app_dir) catch |err| {
+        if (err != error.FileNotFound) {
+            return err;
+        }
+    };
 }
 
 fn commandList(allocator: std.mem.Allocator) !void {
-    const savefile_path: []const u8 = try std.fs.getAppDataDir(allocator, "until");
+    const savefile_path: []const u8 = try savefilePath(allocator);
     defer allocator.free(savefile_path);
+
     const savefile = std.fs.openFileAbsolute(savefile_path, .{ .mode = .read_only }) catch |err| {
         if (err == error.FileNotFound) {
             return;
@@ -148,6 +164,13 @@ fn commandList(allocator: std.mem.Allocator) !void {
         }
         std.debug.print("  {d:.2}. {d} days {s} {s}\n", .{ event_i + 1, duration_days, if (is_past) "since" else "until", event_name });
     }
+}
+
+/// Returns the absolute path for the json save file
+fn savefilePath(allocator: std.mem.Allocator) ![]const u8 {
+    const path = try std.fs.getAppDataDir(allocator, "until");
+    defer allocator.free(path);
+    return try std.mem.join(allocator, "/", &[_][]const u8{ path, save_filename });
 }
 
 /// Expected format dd/mm/yyyy
