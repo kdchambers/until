@@ -9,10 +9,11 @@ const c = @cImport({
 });
 
 const usage_message =
+    \\Until - Keep track of important milestones from the terminal
     \\usage:
-    \\  until <command>
+    \\  unt <command>
     \\  commands:
-    \\    add  <event_name> [<description>] <date>
+    \\    add  <event_name> <date>
     \\    rm   <event_id>
     \\    list
     \\    reset (delete save file)
@@ -192,8 +193,6 @@ fn parseDateString(date: []const u8) !i64 {
     const day: u32 = ((date[0] - '0') * 10) + date[1] - '0';
     const month: u32 = ((date[3] - '0') * 10) + date[4] - '0';
     const year: u32 = (@intCast(u32, date[6] - '0') * 1000) + @intCast(u32, date[7] - '0') * 100 + ((date[8] - '0') * 10) + (date[9] - '0');
-
-    std.debug.print("Date: {d}/{d}/{d}\n", .{ day, month, year });
 
     var time: c.tm = undefined;
     time.tm_year = @intCast(c_int, year - 1900);
