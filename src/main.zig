@@ -21,6 +21,7 @@ const usage_message =
 ;
 
 const save_filename = "savefile.json";
+const max_savefile_size = 1024 * 1024;
 
 const JsonEntry = struct {
     name: []const u8,
@@ -71,8 +72,7 @@ pub fn main() !void {
 }
 
 fn commandAdd(allocator: std.mem.Allocator, name: []const u8, date: []const u8) !void {
-    // Just checking that the string is the correct format for when we deserialize
-    _ = try parseDateString(date);
+    const new_event_timestamp = try parseDateString(date);
 
     const app_dir = try std.fs.getAppDataDir(allocator, "until");
     defer allocator.free(app_dir);
@@ -82,14 +82,17 @@ fn commandAdd(allocator: std.mem.Allocator, name: []const u8, date: []const u8) 
         }
     };
 
+    var skip_json_load: bool = false;
+
     const savefile_path = try std.mem.join(allocator, "/", &[_][]const u8{ app_dir, save_filename });
     defer allocator.free(savefile_path);
-    var save_file = blk: {
-        const existing_file = std.fs.openFileAbsolute(savefile_path, .{ .mode = .write_only }) catch |open_err| {
+    var savefile = blk: {
+        const existing_file = std.fs.openFileAbsolute(savefile_path, .{ .mode = .read_write }) catch |open_err| {
             if (open_err != error.FileNotFound) {
                 return open_err;
             }
             std.log.info("No savefile found, creating now: '{s}'", .{savefile_path});
+            skip_json_load = true;
             const new_file = std.fs.createFileAbsolute(savefile_path, .{ .truncate = true, .read = true }) catch |create_err| {
                 std.log.err("Failed to create new savefile at '{s}'. Error: {}", .{ savefile_path, create_err });
                 return create_err;
@@ -98,14 +101,92 @@ fn commandAdd(allocator: std.mem.Allocator, name: []const u8, date: []const u8) 
         };
         break :blk existing_file;
     };
-    defer save_file.close();
+    defer savefile.close();
 
-    const json_entry = JsonEntry{
-        .name = name,
-        .date = date,
-    };
-    const json_array = [1]JsonEntry{json_entry};
-    try std.json.stringify(json_array, .{}, save_file.writer());
+    if (skip_json_load) {
+        const json_entry = JsonEntry{
+            .name = name,
+            .date = date,
+        };
+        const json_array = [1]JsonEntry{json_entry};
+        try std.json.stringify(json_array, .{}, savefile.writer());
+        return;
+    }
+
+    //
+    // Load existing json into memory, append new event, rewrite back to file
+    //
+
+    const json_string = try savefile.readToEndAlloc(allocator, max_savefile_size);
+    defer allocator.free(json_string);
+
+    var parser = std.json.Parser.init(allocator, true);
+    defer parser.deinit();
+
+    var json_root = try parser.parse(json_string);
+    defer json_root.deinit();
+
+    // Set file size to 0
+    try savefile.seekTo(0);
+    try savefile.setEndPos(0);
+
+    if (json_root.root.Array.items.len == 0) {
+        const json_entry = JsonEntry{
+            .name = name,
+            .date = date,
+        };
+        const json_array = [1]JsonEntry{json_entry};
+        try std.json.stringify(json_array, .{}, savefile.writer());
+        return;
+    }
+
+    var entries = try allocator.alloc(JsonEntry, json_root.root.Array.items.len + 1);
+    defer allocator.free(entries);
+
+    var timestamps = try allocator.alloc(i64, json_root.root.Array.items.len + 1);
+    defer allocator.free(timestamps);
+
+    std.debug.assert(entries.len == timestamps.len);
+
+    for (json_root.root.Array.items) |event, event_i| {
+        var it = event.Object.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.key_ptr.*, "date")) {
+                entries[event_i].date = entry.value_ptr.*.String;
+                timestamps[event_i] = try parseDateString(entry.value_ptr.*.String);
+                continue;
+            }
+            if (std.mem.eql(u8, entry.key_ptr.*, "name")) {
+                entries[event_i].name = entry.value_ptr.*.String;
+                continue;
+            }
+        }
+    }
+
+    entries[entries.len - 1] = JsonEntry{ .name = name, .date = date };
+    timestamps[entries.len - 1] = new_event_timestamp;
+
+    //
+    // Sort by timestamp
+    //
+
+    {
+        const entry_count: usize = entries.len;
+        var step: usize = 1;
+        while (step < entry_count) : (step += 1) {
+            const key = timestamps[step];
+            const entry_key = entries[step];
+            var x = @intCast(i64, step) - 1;
+            while (x >= 0 and timestamps[@intCast(usize, x)] > key) : (x -= 1) {
+                timestamps[@intCast(usize, x) + 1] = timestamps[@intCast(usize, x)];
+                entries[@intCast(usize, x) + 1] = entries[@intCast(usize, x)];
+            }
+            timestamps[@intCast(usize, x + 1)] = key;
+            entries[@intCast(usize, x + 1)] = entry_key;
+        }
+    }
+
+    try std.json.stringify(entries, .{}, savefile.writer());
 }
 
 // TODO: Implement
@@ -136,7 +217,7 @@ fn commandList(allocator: std.mem.Allocator) !void {
     };
     defer savefile.close();
 
-    const json_string = try savefile.readToEndAlloc(allocator, 100 * 1024);
+    const json_string = try savefile.readToEndAlloc(allocator, max_savefile_size);
     defer allocator.free(json_string);
 
     var parser = std.json.Parser.init(allocator, true);
