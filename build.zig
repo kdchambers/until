@@ -4,7 +4,7 @@ pub fn build(b: *std.build.Builder) void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
 
-    const exe = b.addExecutable("unt", "src/main.zig");
+    const exe = b.addExecutable("untl", "src/main.zig");
     exe.setTarget(target);
     exe.setBuildMode(mode);
     exe.linkSystemLibrary("c");
